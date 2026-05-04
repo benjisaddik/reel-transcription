@@ -1,0 +1,7 @@
+streamlit
+yt-dlp
+faster-whisper
+pyannote.audio>=3.1
+huggingface-hub<1.0
+imageio-ffmpeg
+python-dotenv
