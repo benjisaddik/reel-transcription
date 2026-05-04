@@ -11,6 +11,7 @@ Transcribe Instagram Reels locally. Paste a URL, get the words back, with option
 - Transcribes locally with [faster-whisper](https://github.com/SYSTRAN/faster-whisper). No API calls, no per-minute cost
 - Optionally identifies speakers with [pyannote.audio](https://github.com/pyannote/pyannote-audio)
 - Renders results in a Streamlit UI with timestamped, speaker-labelled segments
+- Batch mode: paste a profile URL (e.g. `https://www.instagram.com/<username>/`) and the app transcribes the most recent N reels (default 5, max 20)
 
 ## Requirements
 

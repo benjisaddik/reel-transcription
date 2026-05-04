@@ -1,5 +1,6 @@
 import hashlib
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -369,6 +370,109 @@ CSS = """
     font-size: 0.8rem !important;
   }
 
+  /* ── Number input (batch cap) ─────────────────── */
+  div[data-testid="stNumberInput"] {
+    gap: 0 !important;
+  }
+  div[data-testid="stNumberInput"] > label,
+  .stNumberInput label {
+    background: #000 !important;
+    color: #fff !important;
+    padding: 0.55rem 1.25rem !important;
+    border: 3px solid #000 !important;
+    border-bottom: 0 !important;
+    font-weight: 700 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.15em !important;
+    font-size: 0.7rem !important;
+    margin: 0 !important;
+    display: block !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+  }
+  div[data-testid="stNumberInput"] > label *,
+  .stNumberInput label * {
+    color: #fff !important;
+    background: transparent !important;
+    font-weight: 700 !important;
+    font-size: 0.7rem !important;
+    letter-spacing: 0.15em !important;
+    margin: 0 !important;
+  }
+  .stNumberInput input {
+    border: 3px solid #000 !important;
+    border-radius: 0 !important;
+    padding: 0.85rem 1.25rem !important;
+    font-size: 1rem !important;
+    font-weight: 600 !important;
+    background: #fff !important;
+    color: #000 !important;
+    font-family: 'JetBrains Mono', monospace !important;
+  }
+  .stNumberInput button {
+    border: 3px solid #000 !important;
+    border-left: 0 !important;
+    border-radius: 0 !important;
+    background: #fff !important;
+    color: #000 !important;
+  }
+  .stNumberInput button:hover {
+    background: #FDE047 !important;
+  }
+
+  /* ── Reel cards (batch results) ────────────────── */
+  .reel-card {
+    border: 3px solid #000;
+    margin-bottom: 1rem;
+  }
+  .reel-card-header {
+    background: #000;
+    color: #fff;
+    padding: 0.6rem 1.1rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 0.78rem;
+    letter-spacing: 0.08em;
+    gap: 1rem;
+  }
+  .reel-card-header * {
+    color: #fff !important;
+    background: transparent !important;
+  }
+  .reel-card-header .id {
+    font-family: 'JetBrains Mono', monospace !important;
+  }
+  .reel-card-body {
+    padding: 1rem 1.25rem;
+    font-size: 0.98rem;
+    line-height: 1.55;
+    color: #000;
+  }
+  .reel-card.processing .reel-card-header {
+    background: #FDE047;
+  }
+  .reel-card.processing .reel-card-header * {
+    color: #000 !important;
+  }
+  .reel-card.processing .reel-card-body {
+    color: #737373;
+    font-style: italic;
+  }
+  .reel-card.error .reel-card-header {
+    background: #FDE047;
+  }
+  .reel-card.error .reel-card-header * {
+    color: #000 !important;
+  }
+  .reel-card.error .reel-card-body {
+    background: #FFFBE6;
+    font-family: 'JetBrains Mono', monospace !important;
+    font-size: 0.85rem;
+  }
+
   /* ── Pills (browser picker) ─────────────────────── */
   [data-testid="stPills"] > label,
   .stPills label {
@@ -489,6 +593,40 @@ def load_diarizer():
     return pipe
 
 
+SINGLE_REEL_RE = re.compile(r"instagram\.com/(reel|p|tv)/[^/?#]+")
+
+
+def is_single_reel(url: str) -> bool:
+    return bool(SINGLE_REEL_RE.search(url))
+
+
+def list_profile_reels(profile_url: str, browser=None, limit: int = 5):
+    """Return [(shortcode, url), ...] for the most-recent N reels on a profile."""
+    ydl_opts = {
+        "extract_flat": True,
+        "playlistend": limit,
+        "quiet": True,
+        "no_warnings": True,
+    }
+    if browser:
+        ydl_opts["cookiesfrombrowser"] = (browser,)
+    elif COOKIES_FILE:
+        ydl_opts["cookiefile"] = COOKIES_FILE
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(profile_url, download=False)
+    entries = info.get("entries") or []
+    out = []
+    for e in entries:
+        url = e.get("url") or e.get("webpage_url")
+        if not url:
+            continue
+        if not url.startswith("http"):
+            url = f"https://www.instagram.com/p/{e.get('id')}/"
+        out.append((e.get("id", "?"), url))
+    return out
+
+
 def download_audio(url: str, out_dir: Path, browser=None) -> Path:
     ydl_opts = {
         "format": "bestaudio/best",
@@ -571,9 +709,11 @@ status_slot = st.empty()
 
 # ── INPUT ─────────────────────────────────────────────────
 url = st.text_input(
-    "Reel URL",
-    placeholder="https://www.instagram.com/reel/...",
+    "Reel URL or profile URL",
+    placeholder="https://www.instagram.com/reel/... or /<username>/",
 )
+
+is_batch = bool(url.strip()) and not is_single_reel(url)
 
 BROWSERS = ["PUBLIC", "CHROME", "FIREFOX", "SAFARI", "EDGE", "BRAVE", "OPERA"]
 _env_browser = (COOKIES_BROWSER or "").upper().strip()
@@ -588,15 +728,27 @@ browser_choice = st.pills(
 if browser_choice is None:
     browser_choice = "PUBLIC"
 
+if is_batch:
+    max_reels = st.number_input(
+        "Max reels (most recent first)",
+        min_value=1,
+        max_value=20,
+        value=5,
+        step=1,
+    )
+else:
+    max_reels = 1
+
 diarize_enabled = st.checkbox(
     "Identify speakers",
-    value=bool(HF_TOKEN),
-    disabled=not HF_TOKEN,
+    value=bool(HF_TOKEN) and not is_batch,
+    disabled=(not HF_TOKEN) or is_batch,
 )
 
 selected_browser = None if browser_choice == "PUBLIC" else browser_choice.lower()
 
-go = st.button("▸ Transcribe")
+go_label = "▸ Transcribe batch" if is_batch else "▸ Transcribe"
+go = st.button(go_label)
 
 # ── Render status grid using selected values ─────────────
 if selected_browser:
@@ -611,6 +763,15 @@ else:
 
 diar_active = diarize_enabled and bool(HF_TOKEN)
 
+if is_batch:
+    mode_label = "Mode"
+    mode_value = f"BATCH · {max_reels} REELS"
+    mode_on = True
+else:
+    mode_label = "Speakers"
+    mode_value = "DIARISATION ON" if diar_active else ("OFF" if HF_TOKEN else "NO HF TOKEN")
+    mode_on = diar_active
+
 status_slot.markdown(
     f"""
     <div class="status-grid">
@@ -618,9 +779,9 @@ status_slot.markdown(
         <div class="status-label">Cookies</div>
         <div class="status-value">{cookies_value}</div>
       </div>
-      <div class="status-cell {'on' if diar_active else ''}">
-        <div class="status-label">Speakers</div>
-        <div class="status-value">{"DIARIZATION ON" if diar_active else ("OFF" if HF_TOKEN else "NO HF TOKEN")}</div>
+      <div class="status-cell {'on' if mode_on else ''}">
+        <div class="status-label">{mode_label}</div>
+        <div class="status-value">{mode_value}</div>
       </div>
       <div class="status-cell">
         <div class="status-label">Model</div>
@@ -632,11 +793,89 @@ status_slot.markdown(
 )
 
 # ── RUN ───────────────────────────────────────────────────
-if go:
-    if not url.strip():
-        st.error("PASTE A REEL URL ABOVE.")
-        st.stop()
+if go and not url.strip():
+    st.error("PASTE A REEL URL OR PROFILE URL ABOVE.")
+    st.stop()
 
+if go and is_batch:
+    with tempfile.TemporaryDirectory() as td:
+        tmp_dir = Path(td)
+
+        with st.spinner(f"FETCHING UP TO {max_reels} REELS…"):
+            try:
+                reels = list_profile_reels(url, browser=selected_browser, limit=int(max_reels))
+            except Exception as e:
+                st.error(f"COULDN'T FETCH PROFILE — {e}")
+                st.stop()
+
+        if not reels:
+            st.error("NO REELS FOUND ON THIS PAGE.")
+            st.stop()
+
+        st.markdown(
+            f'<div class="result-header">'
+            f'<span class="result-label">Batch / {len(reels)} reels</span>'
+            f'<span class="result-meta">{url}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        all_results = []
+        for i, (reel_id, reel_url) in enumerate(reels):
+            slot = st.empty()
+            slot.markdown(
+                f'<div class="reel-card processing">'
+                f'  <div class="reel-card-header">'
+                f'    <span class="id">{reel_id}</span>'
+                f'    <span>{i + 1} / {len(reels)} · PROCESSING…</span>'
+                f'  </div>'
+                f'  <div class="reel-card-body">Fetching audio and transcribing…</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            try:
+                audio_path = download_audio(reel_url, tmp_dir, browser=selected_browser)
+                segments, info = transcribe(audio_path)
+                text = " ".join(s.text.strip() for s in segments)
+                all_results.append({"id": reel_id, "url": reel_url, "info": info, "text": text})
+                slot.markdown(
+                    f'<div class="reel-card">'
+                    f'  <div class="reel-card-header">'
+                    f'    <span class="id">{reel_id}</span>'
+                    f'    <span>{info.language.upper()} · {info.duration:.1f}s</span>'
+                    f'  </div>'
+                    f'  <div class="reel-card-body">{text}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+                audio_path.unlink(missing_ok=True)
+            except Exception as e:
+                slot.markdown(
+                    f'<div class="reel-card error">'
+                    f'  <div class="reel-card-header">'
+                    f'    <span class="id">{reel_id}</span>'
+                    f'    <span>FAILED</span>'
+                    f'  </div>'
+                    f'  <div class="reel-card-body">{e}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+        if all_results:
+            combined = "\n\n".join(
+                f"=== {r['id']} ({r['info'].language.upper()} · {r['info'].duration:.1f}s) ==="
+                f"\n{r['url']}\n\n{r['text']}"
+                for r in all_results
+            )
+            st.download_button(
+                "↓ Download all .txt",
+                combined,
+                file_name="batch_transcripts.txt",
+                mime="text/plain",
+            )
+    st.stop()
+
+if go:
     with tempfile.TemporaryDirectory() as td:
         tmp_dir = Path(td)
 
