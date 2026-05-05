@@ -1,5 +1,6 @@
 streamlit
 yt-dlp
+instaloader
 faster-whisper
 pyannote.audio>=3.1
 huggingface-hub<1.0

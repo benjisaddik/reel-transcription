@@ -24,6 +24,7 @@ def _patch_speechbrain_lazy():
 _patch_speechbrain_lazy()
 
 import imageio_ffmpeg
+import instaloader
 import streamlit as st
 import yt_dlp
 from faster_whisper import WhisperModel
@@ -594,36 +595,45 @@ def load_diarizer():
 
 
 SINGLE_REEL_RE = re.compile(r"instagram\.com/(reel|p|tv)/[^/?#]+")
+USERNAME_RE = re.compile(r"instagram\.com/([^/?#]+)/?")
 
 
 def is_single_reel(url: str) -> bool:
     return bool(SINGLE_REEL_RE.search(url))
 
 
-def list_profile_reels(profile_url: str, browser=None, limit: int = 5):
-    """Return [(shortcode, url), ...] for the most-recent N reels on a profile."""
-    ydl_opts = {
-        "extract_flat": True,
-        "playlistend": limit,
-        "quiet": True,
-        "no_warnings": True,
-    }
-    if browser:
-        ydl_opts["cookiesfrombrowser"] = (browser,)
-    elif COOKIES_FILE:
-        ydl_opts["cookiefile"] = COOKIES_FILE
+def extract_username(profile_url: str):
+    m = USERNAME_RE.search(profile_url)
+    if not m:
+        return None
+    candidate = m.group(1)
+    # Skip non-username paths.
+    if candidate in {"reel", "p", "tv", "explore", "stories", "accounts"}:
+        return None
+    return candidate
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(profile_url, download=False)
-    entries = info.get("entries") or []
+
+def list_profile_reels(profile_url: str, browser=None, limit: int = 5):
+    """Return [(shortcode, url), ...] for the most-recent N video posts on a profile.
+
+    Uses instaloader because yt-dlp's instagram:user extractor is currently
+    broken — instaloader still works for public profiles without auth.
+    """
+    username = extract_username(profile_url)
+    if not username:
+        raise ValueError(f"Couldn't extract a username from {profile_url}")
+
+    L = instaloader.Instaloader(quiet=True, download_pictures=False, download_videos=False,
+                                download_video_thumbnails=False, download_geotags=False,
+                                download_comments=False, save_metadata=False)
+    profile = instaloader.Profile.from_username(L.context, username)
     out = []
-    for e in entries:
-        url = e.get("url") or e.get("webpage_url")
-        if not url:
+    for post in profile.get_posts():
+        if not post.is_video:
             continue
-        if not url.startswith("http"):
-            url = f"https://www.instagram.com/p/{e.get('id')}/"
-        out.append((e.get("id", "?"), url))
+        out.append((post.shortcode, f"https://www.instagram.com/reel/{post.shortcode}/"))
+        if len(out) >= limit:
+            break
     return out
 
 
